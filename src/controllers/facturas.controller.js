@@ -45,8 +45,28 @@ function firstDefined(...values) {
   return values.find((value) => value !== undefined && value !== null && value !== '');
 }
 
+function maybeParseJson(value) {
+  if (typeof value !== 'string') return value;
+
+  const trimmed = value.trim();
+  if (!trimmed) return value;
+
+  if (
+    (trimmed.startsWith('[') && trimmed.endsWith(']')) ||
+    (trimmed.startsWith('{') && trimmed.endsWith('}'))
+  ) {
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      return value;
+    }
+  }
+
+  return value;
+}
+
 function normalizeProductos(body) {
-  const source = firstDefined(
+  const candidates = [
     body.productos,
     body.items,
     body.detalle,
@@ -54,18 +74,23 @@ function normalizeProductos(body) {
     body.lineas,
     body.lines,
     body.products
-  );
+  ];
 
-  if (Array.isArray(source)) {
-    return source;
+  for (const candidate of candidates) {
+    const source = maybeParseJson(candidate);
+
+    if (Array.isArray(source) && source.length > 0) {
+      return source;
+    }
+
+    if (source && typeof source === 'object' && !Array.isArray(source)) {
+      return [source];
+    }
   }
 
-  if (source && typeof source === 'object') {
-    return [source];
-  }
-
-  if (body.producto && typeof body.producto === 'object') {
-    return [body.producto];
+  const singleProduct = maybeParseJson(body.producto || body.item);
+  if (singleProduct && typeof singleProduct === 'object') {
+    return Array.isArray(singleProduct) ? singleProduct : [singleProduct];
   }
 
   return [];
@@ -89,7 +114,6 @@ function normalizeCliente(body) {
 
 function normalizeDocumentoRequest(rawBody) {
   const body = rawBody || {};
-
   const productos = normalizeProductos(body);
 
   return {
@@ -117,6 +141,8 @@ async function postFactura(req, res) {
 
     console.log('Solicitud DTE recibida', {
       tipo_documento: body.tipo_documento,
+      body_keys: rawBody && typeof rawBody === 'object' ? Object.keys(rawBody) : [],
+      productos_type: Array.isArray(body.productos) ? 'array' : typeof body.productos,
       productos: Array.isArray(body.productos) ? body.productos.length : 0,
       cliente_rut: body.cliente?.rut || null
     });
