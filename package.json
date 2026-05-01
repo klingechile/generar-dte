@@ -1,0 +1,17 @@
+{
+  "name": "klinge-lioren-dte-integration",
+  "version": "1.0.0",
+  "description": "Servicio backend para emitir facturas/boletas vía Lioren sin exponer token al frontend.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check src/services/LiorenService.js && node --check src/controllers/facturas.controller.js && node --check src/routes/facturas.routes.js && node --check server.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
