@@ -9,6 +9,7 @@
 
 const DEFAULT_BASE_URL = 'https://www.lioren.cl';
 const DEFAULT_DTE_PATH = '/api/dtes';
+const DEFAULT_BOLETA_PATH = '/api/boletas';
 const DEFAULT_TIMEOUT_MS = 20_000;
 const RETRY_STATUS_CODES = new Set([500, 502, 503, 504]);
 const NON_RETRY_STATUS_CODES = new Set([400, 401, 403, 404, 422]);
@@ -68,10 +69,51 @@ function sanitizeForLog(payload) {
   return clone;
 }
 
+function getByPath(obj, path) {
+  return String(path)
+    .split('.')
+    .reduce((acc, key) => (acc && acc[key] !== undefined ? acc[key] : undefined), obj);
+}
+
+function normalizeItems(input) {
+  const paths = [
+    'productos',
+    'items',
+    'detalle',
+    'detalles',
+    'lineas',
+    'lines',
+    'products',
+    'documento.detalle',
+    'documento.detalles',
+    'documento.items',
+    'dte.detalle',
+    'dte.detalles',
+    'payload.productos',
+    'payload.items',
+    'payload.detalle',
+    'data.productos',
+    'data.items',
+    'data.detalle',
+  ];
+
+  for (const path of paths) {
+    const value = getByPath(input, path);
+    if (Array.isArray(value) && value.length > 0) return value;
+    if (value && typeof value === 'object' && !Array.isArray(value)) return [value];
+  }
+
+  if (input?.producto && typeof input.producto === 'object') return [input.producto];
+  if (input?.item && typeof input.item === 'object') return [input.item];
+
+  return [];
+}
+
 class LiorenService {
   constructor(options = {}) {
     this.baseUrl = options.baseUrl || process.env.LIOREN_BASE_URL || DEFAULT_BASE_URL;
     this.dtePath = options.dtePath || process.env.LIOREN_DTE_PATH || DEFAULT_DTE_PATH;
+    this.boletaPath = options.boletaPath || process.env.LIOREN_BOLETA_PATH || DEFAULT_BOLETA_PATH;
     this.consultaDtePath = options.consultaDtePath || process.env.LIOREN_CONSULTA_DTE_PATH || DEFAULT_DTE_PATH;
     this.timeoutMs = Number(options.timeoutMs || process.env.LIOREN_TIMEOUT_MS || DEFAULT_TIMEOUT_MS);
     this.maxRetries = Number(options.maxRetries ?? process.env.LIOREN_MAX_RETRIES ?? 2);
@@ -94,7 +136,7 @@ class LiorenService {
         code: 'LIOREN_TOKEN_MISSING',
       });
     }
-    return token;
+    return token.replace(/^Bearer\s+/i, '').trim();
   }
 
   buildUrl(path) {
@@ -239,11 +281,12 @@ class LiorenService {
     logger(message, sanitizeForLog(meta));
   }
 
-  async emitirDTE(payload) {
+  async emitirDTE(payload, options = {}) {
     this.validatePayload(payload);
 
-    const url = this.buildUrl(this.dtePath);
+    const url = this.buildUrl(options.path || this.dtePath);
     this.safeLog('info', 'Emitiendo DTE en Lioren', {
+      endpoint: options.path || this.dtePath,
       tipo_dte: firstDefined(payload.tipo_dte, payload.documento?.tipo_dte),
       receptor: payload.receptor?.rut || payload.receptor?.RUTRecep || '[sin rut]',
       items: payload.detalle?.length || 0,
@@ -264,17 +307,18 @@ class LiorenService {
 
   emitirFactura(data) {
     const payload = this.buildPayload(data, 33, true);
-    return this.emitirDTE(payload);
+    return this.emitirDTE(payload, { path: this.dtePath });
   }
 
   emitirFacturaExenta(data) {
     const payload = this.buildPayload(data, 34, false);
-    return this.emitirDTE(payload);
+    return this.emitirDTE(payload, { path: this.dtePath });
   }
 
   emitirBoleta(data) {
     const payload = this.buildPayload(data, 39, true);
-    return this.emitirDTE(payload);
+    const useSeparateBoletaEndpoint = process.env.LIOREN_USE_BOLETA_ENDPOINT === 'true';
+    return this.emitirDTE(payload, { path: useSeparateBoletaEndpoint ? this.boletaPath : this.dtePath });
   }
 
   async consultarDTE(id) {
@@ -296,23 +340,31 @@ class LiorenService {
   }
 
   buildPayload(data, tipoDte, afecto) {
-    const cliente = data.cliente || data.receptor || {};
-    const productos = Array.isArray(data.productos) ? data.productos : Array.isArray(data.detalle) ? data.detalle : [];
+    const cliente = data.cliente || data.receptor || data.Receptor || {};
+    const productos = normalizeItems(data);
 
     if (!productos.length) {
-      throw new LiorenError('Debe incluir al menos un producto', { status: 400, code: 'NO_ITEMS' });
+      throw new LiorenError('Debe incluir al menos un producto', {
+        status: 400,
+        code: 'NO_ITEMS',
+        details: {
+          body_keys: data && typeof data === 'object' ? Object.keys(data) : [],
+          accepted_item_keys: ['productos', 'items', 'detalle', 'detalles', 'lineas', 'documento.detalle', 'data.productos'],
+        },
+      });
     }
 
     const detalle = productos.map((item, index) => {
-      const cantidad = toNumber(firstDefined(item.cantidad, item.qty), 1);
-      const precioUnitario = toNumber(firstDefined(item.precio_unitario, item.precio, item.monto_unitario), 0);
-      const descuento = toNumber(firstDefined(item.descuento, item.descuento_monto), 0);
+      const cantidad = toNumber(firstDefined(item.cantidad, item.qty, item.QtyItem, item.quantity), 1);
+      const precioUnitario = toNumber(firstDefined(item.precio_unitario, item.precio, item.PrcItem, item.price, item.monto_unitario), 0);
+      const descuento = toNumber(firstDefined(item.descuento, item.descuento_monto, item.discount), 0);
       const subtotal = round(cantidad * precioUnitario - descuento);
+      const nombre = firstDefined(item.nombre, item.descripcion, item.NmbItem, item.name, item.sku, `Item ${index + 1}`);
 
       return {
         linea: index + 1,
-        nombre: firstDefined(item.nombre, item.descripcion, item.sku, `Item ${index + 1}`),
-        descripcion: firstDefined(item.descripcion, item.nombre, item.sku, `Item ${index + 1}`),
+        nombre,
+        descripcion: firstDefined(item.descripcion, item.nombre, item.NmbItem, item.name, item.sku, `Item ${index + 1}`),
         cantidad,
         precio_unitario: round(precioUnitario),
         descuento: round(descuento),
@@ -335,11 +387,12 @@ class LiorenService {
         referencias: data.referencias || [],
       },
       tipo_dte: tipoDte,
+      tipo_documento: tipoDte,
       receptor: {
-        rut: cleanRut(firstDefined(cliente.rut, cliente.RUTRecep)),
-        razon_social: firstDefined(cliente.razon_social, cliente.nombre, cliente.RznSocRecep),
-        giro: firstDefined(cliente.giro, cliente.GiroRecep, 'Sin giro informado'),
-        direccion: firstDefined(cliente.direccion, cliente.DirRecep, 'Sin dirección informada'),
+        rut: cleanRut(firstDefined(cliente.rut, cliente.RUTRecep, tipoDte === 39 ? '66666666-6' : '')),
+        razon_social: firstDefined(cliente.razon_social, cliente.razonSocial, cliente.nombre, cliente.RznSocRecep, tipoDte === 39 ? 'Consumidor final' : ''),
+        giro: firstDefined(cliente.giro, cliente.GiroRecep, tipoDte === 39 ? 'Particular' : 'Sin giro informado'),
+        direccion: firstDefined(cliente.direccion, cliente.DirRecep, tipoDte === 39 ? 'Sin dirección' : 'Sin dirección informada'),
         comuna: firstDefined(cliente.comuna, cliente.CmnaRecep, 'Santiago'),
         ciudad: firstDefined(cliente.ciudad, cliente.CiudadRecep, cliente.comuna, 'Santiago'),
         email: firstDefined(cliente.email, cliente.correo),
