@@ -1,8 +1,12 @@
 'use strict';
 
 const { LiorenService, LiorenError } = require('../services/LiorenService');
+const { CloudinaryService } = require('../services/CloudinaryService');
+const { EmailService } = require('../services/EmailService');
 
 const liorenService = new LiorenService();
+const cloudinaryService = new CloudinaryService();
+const emailService = new EmailService();
 
 function normalizeError(error) {
   if (error instanceof LiorenError) {
@@ -250,6 +254,94 @@ function tipoToDte(tipo) {
   return { tipoDte: 33, exentoDocumento: false };
 }
 
+function extractRecipientEmail(body) {
+  return firstDefined(
+    body.email,
+    body.correo,
+    body.receptor?.email,
+    body.receptor?.correo,
+    body.cliente?.email,
+    body.cliente?.correo,
+    ''
+  );
+}
+
+function extractRecipientName(body) {
+  return firstDefined(
+    body.receptor?.rs,
+    body.receptor?.razon_social,
+    body.receptor?.nombre,
+    body.cliente?.razon_social,
+    body.cliente?.nombre,
+    ''
+  );
+}
+
+async function enrichDteResult(result, body) {
+  const enriched = { ...result };
+  const pdf = result?.pdf || result?.raw?.pdf || '';
+  const shouldUploadPdf = process.env.CLOUDINARY_UPLOAD_DTE_PDF !== 'false';
+
+  if (pdf && shouldUploadPdf) {
+    try {
+      const upload = await cloudinaryService.uploadPdfBase64(pdf, {
+        tipo_documento: body.tipo_documento,
+        tipo_dte: result.tipo_dte || result.raw?.tipodoc,
+        folio: result.folio || result.raw?.folio,
+        lioren_id: result.lioren_id || result.raw?.id,
+        venta_id: body.venta_id
+      });
+
+      if (upload && !upload.skipped) {
+        enriched.pdf_url = upload.secure_url || upload.url || '';
+        enriched.cloudinary_public_id = upload.public_id || '';
+        enriched.cloudinary_asset_id = upload.asset_id || '';
+      } else if (upload?.skipped) {
+        enriched.pdf_upload_skipped = upload.reason;
+      }
+    } catch (error) {
+      console.error('Error subiendo PDF DTE a Cloudinary', {
+        name: error.name,
+        message: error.message,
+        status: error.status,
+        details: error.details
+      });
+      enriched.pdf_upload_error = error.message;
+    }
+  }
+
+  const shouldEmail = body.enviar_email === true || body.enviarEmail === true || process.env.DTE_EMAIL_AUTO_SEND === 'true';
+  const emailTo = extractRecipientEmail(body);
+
+  if (shouldEmail && emailTo) {
+    try {
+      const emailResult = await emailService.sendDteEmail({
+        to: emailTo,
+        tipoDocumento: body.tipo_documento,
+        folio: enriched.folio,
+        pdfBase64: pdf,
+        pdfUrl: enriched.pdf_url,
+        receptorNombre: extractRecipientName(body)
+      });
+
+      enriched.email = emailResult;
+    } catch (error) {
+      console.error('Error enviando DTE por email', {
+        name: error.name,
+        message: error.message,
+        status: error.status,
+        details: error.details
+      });
+      enriched.email = {
+        ok: false,
+        error: error.message
+      };
+    }
+  }
+
+  return enriched;
+}
+
 async function debugFacturaBody(req, res) {
   const rawBody = parseBody(req);
   const body = normalizeDocumentoRequest(rawBody);
@@ -321,9 +413,11 @@ async function postFactura(req, res) {
       });
     }
 
+    const enrichedResult = await enrichDteResult(result, body);
+
     return res.status(201).json({
       ok: true,
-      data: result
+      data: enrichedResult
     });
   } catch (error) {
     console.error('Error emitiendo DTE Lioren', {
