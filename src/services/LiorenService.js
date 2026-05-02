@@ -37,6 +37,16 @@ function firstDefined(...values) {
   return values.find((value) => value !== undefined && value !== null && value !== '');
 }
 
+function firstNonBlank(...values) {
+  for (const value of values) {
+    if (value === undefined || value === null) continue;
+    const text = String(value).trim();
+    if (text !== '') return text;
+  }
+
+  return '';
+}
+
 function cleanRut(rut) {
   return String(rut || '').replace(/\./g, '').trim();
 }
@@ -60,6 +70,11 @@ function normalizeExpects(value) {
   }
 
   return 'pdf';
+}
+
+function normalizeServicio(value) {
+  const servicio = Number(value);
+  return Number.isInteger(servicio) && servicio > 0 ? servicio : 3;
 }
 
 function maybeParseJson(value) {
@@ -302,6 +317,10 @@ class LiorenService {
       errors.push('emisor.fecha es obligatorio');
     }
 
+    if (String(payload?.emisor?.tipodoc) === '39' && !payload?.emisor?.servicio) {
+      errors.push('emisor.servicio es obligatorio para boletas');
+    }
+
     if (!payload?.receptor || typeof payload.receptor !== 'object') {
       errors.push('receptor es obligatorio');
     }
@@ -310,7 +329,7 @@ class LiorenService {
       errors.push('receptor.rut es obligatorio');
     }
 
-    if (!payload?.receptor?.rs) {
+    if (!String(payload?.receptor?.rs || '').trim()) {
       errors.push('receptor.rs es obligatorio');
     }
 
@@ -474,8 +493,10 @@ class LiorenService {
     this.safeLog('info', 'Emitiendo DTE en Lioren', {
       endpoint: path,
       tipodoc: payload.emisor?.tipodoc,
+      servicio: payload.emisor?.servicio,
       expects: payload.expects,
       receptor: payload.receptor?.rut || '[sin rut]',
+      receptor_rs: payload.receptor?.rs || '[sin rs]',
       items: payload.detalles?.length || 0
     });
 
@@ -563,6 +584,15 @@ class LiorenService {
       });
     }
 
+    const emisorServicio = normalizeServicio(
+      firstDefined(
+        data.emisor?.servicio,
+        data.servicio,
+        process.env.LIOREN_DEFAULT_SERVICIO,
+        3
+      )
+    );
+
     if (
       data.emisor &&
       data.receptor &&
@@ -596,7 +626,7 @@ class LiorenService {
 
         return {
           codigo: normalizeItemCode(item, index),
-          nombre: firstDefined(
+          nombre: firstNonBlank(
             item.nombre,
             item.descripcion,
             item.NmbItem,
@@ -611,28 +641,36 @@ class LiorenService {
         };
       });
 
+      const emisor = {
+        rut: cleanRut(rutEmisor),
+        tipodoc: String(tipoDte || data.emisor.tipodoc || data.emisor.tipo),
+        fecha
+      };
+
+      if (String(tipoDte || data.emisor.tipodoc || data.emisor.tipo) === '39') {
+        emisor.servicio = emisorServicio;
+      }
+
+      const receptorRs = firstNonBlank(
+        data.receptor.rs,
+        data.receptor.razon_social,
+        data.receptor.razonSocial,
+        data.receptor.nombre,
+        tipoDte === 39 ? 'Consumidor final' : ''
+      );
+
       const payloadDirecto = {
-        emisor: {
-          rut: cleanRut(rutEmisor),
-          tipodoc: String(tipoDte || data.emisor.tipodoc || data.emisor.tipo),
-          fecha
-        },
+        emisor,
         receptor: {
           rut: cleanRut(
-            firstDefined(
+            firstNonBlank(
               data.receptor.rut,
               data.receptor.RUTRecep,
               tipoDte === 39 ? '66666666-6' : ''
             )
           ),
-          rs: firstDefined(
-            data.receptor.rs,
-            data.receptor.razon_social,
-            data.receptor.razonSocial,
-            data.receptor.nombre,
-            tipoDte === 39 ? 'Consumidor final' : ''
-          ),
-          giro: firstDefined(
+          rs: receptorRs || (tipoDte === 39 ? 'Consumidor final' : ''),
+          giro: firstNonBlank(
             data.receptor.giro,
             data.receptor.GiroRecep,
             tipoDte === 39 ? 'Particular' : 'Sin giro informado'
@@ -653,7 +691,7 @@ class LiorenService {
               76
             )
           ),
-          direccion: firstDefined(
+          direccion: firstNonBlank(
             data.receptor.direccion,
             data.receptor.DirRecep,
             tipoDte === 39 ? 'Sin dirección' : 'Sin dirección informada'
@@ -724,7 +762,7 @@ class LiorenService {
       )
     );
 
-    const razonSocial = firstDefined(
+    const razonSocial = firstNonBlank(
       cliente.rs,
       cliente.razon_social,
       cliente.razonSocial,
@@ -758,7 +796,7 @@ class LiorenService {
         firstDefined(item.monto, item.total, cantidad * precio - descuento)
       );
 
-      const nombre = firstDefined(
+      const nombre = firstNonBlank(
         item.nombre,
         item.descripcion,
         item.NmbItem,
@@ -777,29 +815,35 @@ class LiorenService {
       };
     });
 
+    const emisor = {
+      rut: cleanRut(rutEmisor),
+      tipodoc: String(tipoDte),
+      fecha
+    };
+
+    if (String(tipoDte) === '39') {
+      emisor.servicio = emisorServicio;
+    }
+
     const payload = {
-      emisor: {
-        rut: cleanRut(rutEmisor),
-        tipodoc: String(tipoDte),
-        fecha
-      },
+      emisor,
       receptor: {
         rut: cleanRut(
-          firstDefined(
+          firstNonBlank(
             cliente.rut,
             cliente.RUTRecep,
             tipoDte === 39 ? '66666666-6' : ''
           )
         ),
-        rs: razonSocial,
-        giro: firstDefined(
+        rs: razonSocial || (tipoDte === 39 ? 'Consumidor final' : ''),
+        giro: firstNonBlank(
           cliente.giro,
           cliente.GiroRecep,
           tipoDte === 39 ? 'Particular' : 'Sin giro informado'
         ),
         comuna,
         ciudad,
-        direccion: firstDefined(
+        direccion: firstNonBlank(
           cliente.direccion,
           cliente.DirRecep,
           tipoDte === 39 ? 'Sin dirección' : 'Sin dirección informada'
