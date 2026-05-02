@@ -643,7 +643,14 @@ class LiorenService {
       );
 
       return {
-        codigo: String(firstDefined(item.codigo, item.sku, item.code, index + 1)),
+      codigo: String(
+  firstDefined(
+    item.codigo,
+    item.sku,
+    item.code,
+    `ITEM-${String(index + 1).padStart(3, '0')}`
+  )
+).slice(0, 80),
         nombre,
         cantidad,
         precio,
