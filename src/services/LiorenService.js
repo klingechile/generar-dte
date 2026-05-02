@@ -1,36 +1,5 @@
 'use strict';
 
-/**
- * LiorenService
- *
- * Formato base probado contra Lioren:
- * {
- *   emisor: {
- *     rut: "77965667-5",
- *     tipodoc: "33",
- *     fecha: "2025-10-01"
- *   },
- *   receptor: {
- *     rut: "76684648-3",
- *     rs: "LIOREN ENTERPRISES SPA",
- *     giro: "SERVICIOS INFORMATICOS",
- *     comuna: 95,
- *     ciudad: 76,
- *     direccion: "SANTO DOMINGO 1160 PISO 9"
- *   },
- *   detalles: [
- *     {
- *       codigo: "10000",
- *       nombre: "PRUEBA",
- *       cantidad: 1,
- *       precio: 1,
- *       exento: false,
- *       monto: 1
- *     }
- *   ]
- * }
- */
-
 const DEFAULT_BASE_URL = 'https://www.lioren.cl';
 const DEFAULT_DTE_PATH = '/api/dtes';
 const DEFAULT_BOLETA_PATH = '/api/boletas';
@@ -73,13 +42,7 @@ function cleanRut(rut) {
 }
 
 function normalizeItemCode(item, index) {
-  const rawCode = firstDefined(
-    item.codigo,
-    item.sku,
-    item.code,
-    ''
-  );
-
+  const rawCode = firstDefined(item.codigo, item.sku, item.code, '');
   const code = String(rawCode || '').trim();
 
   if (code.length >= 3) {
@@ -87,6 +50,16 @@ function normalizeItemCode(item, index) {
   }
 
   return `ITEM-${String(index + 1).padStart(3, '0')}`;
+}
+
+function normalizeExpects(value) {
+  const expects = String(value || '').toLowerCase().trim();
+
+  if (['xml', 'pdf', 'all'].includes(expects)) {
+    return expects;
+  }
+
+  return 'pdf';
 }
 
 function maybeParseJson(value) {
@@ -223,6 +196,7 @@ function normalizeLiorenResponse(response) {
       response?.estado,
       'emitido'
     ),
+    lioren_id: firstDefined(data.id, response?.id),
     folio: firstDefined(
       data.folio,
       data.numero_folio,
@@ -372,6 +346,14 @@ class LiorenService {
       });
     }
 
+    if (!payload?.expects) {
+      errors.push('expects es obligatorio');
+    }
+
+    if (payload?.expects && !['xml', 'pdf', 'all'].includes(String(payload.expects).toLowerCase())) {
+      errors.push('expects debe ser xml, pdf o all');
+    }
+
     if (errors.length) {
       throw new LiorenError('Payload Lioren incompleto', {
         status: 400,
@@ -489,6 +471,7 @@ class LiorenService {
     this.safeLog('info', 'Emitiendo DTE en Lioren', {
       endpoint: path,
       tipodoc: payload.emisor?.tipodoc,
+      expects: payload.expects,
       receptor: payload.receptor?.rut || '[sin rut]',
       items: payload.detalles?.length || 0
     });
@@ -702,7 +685,16 @@ class LiorenService {
           tipoDte === 39 ? 'Sin dirección' : 'Sin dirección informada'
         )
       },
-      detalles
+      detalles,
+      expects: normalizeExpects(
+        firstDefined(
+          data.expects,
+          data.formato_documento,
+          data.formatoDocumento,
+          process.env.LIOREN_EXPECTS,
+          'pdf'
+        )
+      )
     };
 
     const folio = firstDefined(data.folio, data.emisor?.folio);
