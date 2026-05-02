@@ -121,6 +121,7 @@ function normalizeCliente(body) {
       cliente.nombre,
       cliente.razon_social,
       cliente.razonSocial,
+      cliente.rs,
       cliente.RznSocRecep,
       'Consumidor final'
     ),
@@ -132,6 +133,7 @@ function normalizeCliente(body) {
     razon_social: firstDefined(
       cliente.razon_social,
       cliente.razonSocial,
+      cliente.rs,
       cliente.nombre,
       cliente.RznSocRecep,
       'Consumidor final'
@@ -149,17 +151,51 @@ function normalizeCliente(body) {
     comuna: firstDefined(
       cliente.comuna,
       cliente.CmnaRecep,
-      'Santiago'
+      95
     ),
     ciudad: firstDefined(
       cliente.ciudad,
       cliente.CiudadRecep,
       cliente.comuna,
-      'Santiago'
+      76
     ),
     email: firstDefined(cliente.email, cliente.correo, ''),
     telefono: firstDefined(cliente.telefono, cliente.phone, '')
   };
+}
+
+function inferTipoDocumento(body) {
+  const explicit = firstDefined(
+    body.tipo_documento,
+    body.tipoDocumento,
+    body.doc_type,
+    body.documento_solicitado
+  );
+
+  if (explicit) {
+    const value = String(explicit).toLowerCase().trim();
+
+    if (value === '39') return 'boleta';
+    if (value === '34') return 'factura_exenta';
+    if (value === '33') return 'factura';
+
+    return value;
+  }
+
+  const tipodoc = String(
+    firstDefined(
+      body.emisor?.tipodoc,
+      body.emisor?.tipo,
+      body.tipo,
+      ''
+    )
+  ).trim();
+
+  if (tipodoc === '39') return 'boleta';
+  if (tipodoc === '34') return 'factura_exenta';
+  if (tipodoc === '33') return 'factura';
+
+  return 'factura';
 }
 
 function normalizeDocumentoRequest(rawBody) {
@@ -168,9 +204,7 @@ function normalizeDocumentoRequest(rawBody) {
 
   return {
     ...body,
-    tipo_documento: String(
-      firstDefined(body.tipo_documento, body.tipoDocumento, body.doc_type, 'factura')
-    ).toLowerCase(),
+    tipo_documento: inferTipoDocumento(body),
     cliente: normalizeCliente(body),
     productos
   };
@@ -184,6 +218,8 @@ function buildBodyDiagnostics(req, rawBody, normalizedBody) {
     content_type_seen: req.headers['content-type'] || null,
     raw_body_type: typeof rawBody,
     body_keys: rawBody && typeof rawBody === 'object' ? Object.keys(rawBody) : [],
+    inferred_tipo_documento: normalizedBody.tipo_documento,
+    emisor_tipodoc: rawBody?.emisor?.tipodoc || null,
 
     productos_raw_type: Array.isArray(productosRaw) ? 'array' : typeof productosRaw,
     productos_raw_is_array: Array.isArray(productosRaw),
@@ -209,20 +245,16 @@ function buildBodyDiagnostics(req, rawBody, normalizedBody) {
 
 function tipoToDte(tipo) {
   if (tipo === 'boleta') {
-    return { tipoDte: 39, afecto: true };
+    return { tipoDte: 39, exentoDocumento: false };
   }
 
   if (tipo === 'factura_exenta' || tipo === 'factura-exenta') {
-    return { tipoDte: 34, afecto: false };
+    return { tipoDte: 34, exentoDocumento: true };
   }
 
-  return { tipoDte: 33, afecto: true };
+  return { tipoDte: 33, exentoDocumento: false };
 }
 
-/**
- * POST /api/facturas/debug-body
- * Diagnóstico seguro. NO llama a Lioren. NO emite DTE.
- */
 async function debugFacturaBody(req, res) {
   const rawBody = parseBody(req);
   const body = normalizeDocumentoRequest(rawBody);
@@ -235,27 +267,20 @@ async function debugFacturaBody(req, res) {
   });
 }
 
-/**
- * POST /api/facturas/preview-lioren
- * Construye el payload que se enviaría a Lioren. NO llama a Lioren. NO emite DTE.
- */
 async function previewLiorenPayload(req, res) {
   try {
     const rawBody = parseBody(req);
     const body = normalizeDocumentoRequest(rawBody);
-    const { tipoDte, afecto } = tipoToDte(body.tipo_documento);
+    const { tipoDte, exentoDocumento } = tipoToDte(body.tipo_documento);
 
-    const liorenPayload = liorenService.buildPayload(body, tipoDte, afecto);
+    const liorenPayload = liorenService.buildPayload(body, tipoDte, exentoDocumento);
 
     return res.status(200).json({
       ok: true,
       message: 'Preview seguro. No se llamó a Lioren.',
       tipo_documento: body.tipo_documento,
       tipo_dte: tipoDte,
-      endpoint_sugerido:
-        body.tipo_documento === 'boleta'
-          ? '/api/dtes o /api/boletas según configuración Lioren'
-          : '/api/dtes',
+      endpoint_sugerido: body.tipo_documento === 'boleta' ? '/api/boletas' : '/api/dtes',
       diagnostics: buildBodyDiagnostics(req, rawBody, body),
       lioren_payload: liorenPayload
     });
@@ -265,10 +290,6 @@ async function previewLiorenPayload(req, res) {
   }
 }
 
-/**
- * POST /api/facturas
- * Emisión real.
- */
 async function postFactura(req, res) {
   try {
     const rawBody = parseBody(req);
@@ -277,6 +298,7 @@ async function postFactura(req, res) {
 
     console.log('Solicitud DTE recibida', {
       tipo_documento: body.tipo_documento,
+      emisor_tipodoc: rawBody?.emisor?.tipodoc || null,
       body_keys: diagnostics.body_keys,
       productos_raw_type: diagnostics.productos_raw_type,
       productos_raw_length: diagnostics.productos_raw_length,
