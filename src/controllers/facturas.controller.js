@@ -95,18 +95,12 @@ function normalizeProductos(body) {
   for (const candidate of candidates) {
     const source = maybeParseJson(candidate);
 
-    if (Array.isArray(source) && source.length > 0) {
-      return source;
-    }
+    if (Array.isArray(source) && source.length > 0) return source;
 
     const numericValues = objectValuesIfNumericObject(source);
-    if (Array.isArray(numericValues) && numericValues.length > 0) {
-      return numericValues;
-    }
+    if (Array.isArray(numericValues) && numericValues.length > 0) return numericValues;
 
-    if (source && typeof source === 'object' && !Array.isArray(source)) {
-      return [source];
-    }
+    if (source && typeof source === 'object' && !Array.isArray(source)) return [source];
   }
 
   return [];
@@ -151,12 +145,13 @@ function normalizeCliente(body) {
     comuna: firstDefined(
       cliente.comuna,
       cliente.CmnaRecep,
+      process.env.LIOREN_DEFAULT_COMUNA_ID,
       95
     ),
     ciudad: firstDefined(
       cliente.ciudad,
       cliente.CiudadRecep,
-      cliente.comuna,
+      process.env.LIOREN_DEFAULT_CIUDAD_ID,
       76
     ),
     email: firstDefined(cliente.email, cliente.correo, ''),
@@ -274,13 +269,14 @@ async function previewLiorenPayload(req, res) {
     const { tipoDte, exentoDocumento } = tipoToDte(body.tipo_documento);
 
     const liorenPayload = liorenService.buildPayload(body, tipoDte, exentoDocumento);
+    const endpoint = body.tipo_documento === 'boleta' ? '/api/boletas' : '/api/dtes';
 
     return res.status(200).json({
       ok: true,
       message: 'Preview seguro. No se llamó a Lioren.',
       tipo_documento: body.tipo_documento,
       tipo_dte: tipoDte,
-      endpoint_sugerido: body.tipo_documento === 'boleta' ? '/api/boletas' : '/api/dtes',
+      endpoint_sugerido: endpoint,
       diagnostics: buildBodyDiagnostics(req, rawBody, body),
       lioren_payload: liorenPayload
     });
