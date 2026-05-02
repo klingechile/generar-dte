@@ -642,23 +642,22 @@ class LiorenService {
         `Item ${index + 1}`
       );
 
-      return {
-      codigo: String(
-  firstDefined(
-    item.codigo,
-    item.sku,
-    item.code,
-    `ITEM-${String(index + 1).padStart(3, '0')}`
-  )
-).slice(0, 80),
-        nombre,
-        cantidad,
-        precio,
-        exento: Boolean(firstDefined(item.exento, exentoDocumento)),
-        monto
-      };
-    });
-
+return {
+  codigo: String(
+    firstDefined(
+      item.codigo,
+      item.sku,
+      item.code,
+      `ITEM-${String(index + 1).padStart(3, '0')}`
+    )
+  ).slice(0, 80),
+  nombre,
+  cantidad,
+  precio,
+  exento: Boolean(firstDefined(item.exento, exentoDocumento)),
+  monto
+};
+      
     const payload = {
       emisor: {
         rut: cleanRut(rutEmisor),
