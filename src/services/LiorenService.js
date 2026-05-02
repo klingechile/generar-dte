@@ -69,8 +69,24 @@ function firstDefined(...values) {
 }
 
 function cleanRut(rut) {
-  // Lioren usa RUT con guion. Quitamos puntos, pero conservamos guion y dígito verificador.
   return String(rut || '').replace(/\./g, '').trim();
+}
+
+function normalizeItemCode(item, index) {
+  const rawCode = firstDefined(
+    item.codigo,
+    item.sku,
+    item.code,
+    ''
+  );
+
+  const code = String(rawCode || '').trim();
+
+  if (code.length >= 3) {
+    return code.slice(0, 80);
+  }
+
+  return `ITEM-${String(index + 1).padStart(3, '0')}`;
 }
 
 function maybeParseJson(value) {
@@ -346,6 +362,7 @@ class LiorenService {
     if (Array.isArray(payload?.detalles)) {
       payload.detalles.forEach((item, index) => {
         if (!item.codigo) errors.push(`detalles[${index}].codigo es obligatorio`);
+        if (String(item.codigo).length < 3) errors.push(`detalles[${index}].codigo debe tener al menos 3 caracteres`);
         if (!item.nombre) errors.push(`detalles[${index}].nombre es obligatorio`);
         if (toNumber(item.cantidad, 0) <= 0) errors.push(`detalles[${index}].cantidad debe ser mayor a 0`);
         if (toNumber(item.precio, -1) < 0) errors.push(`detalles[${index}].precio debe ser mayor o igual a 0`);
@@ -642,22 +659,16 @@ class LiorenService {
         `Item ${index + 1}`
       );
 
-return {
-  codigo: String(
-    firstDefined(
-      item.codigo,
-      item.sku,
-      item.code,
-      `ITEM-${String(index + 1).padStart(3, '0')}`
-    )
-  ).slice(0, 80),
-  nombre,
-  cantidad,
-  precio,
-  exento: Boolean(firstDefined(item.exento, exentoDocumento)),
-  monto
-};
-      
+      return {
+        codigo: normalizeItemCode(item, index),
+        nombre,
+        cantidad,
+        precio,
+        exento: Boolean(firstDefined(item.exento, exentoDocumento)),
+        monto
+      };
+    });
+
     const payload = {
       emisor: {
         rut: cleanRut(rutEmisor),
