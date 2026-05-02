@@ -350,7 +350,10 @@ class LiorenService {
       errors.push('expects es obligatorio');
     }
 
-    if (payload?.expects && !['xml', 'pdf', 'all'].includes(String(payload.expects).toLowerCase())) {
+    if (
+      payload?.expects &&
+      !['xml', 'pdf', 'all'].includes(String(payload.expects).toLowerCase())
+    ) {
       errors.push('expects debe ser xml, pdf o all');
     }
 
@@ -540,6 +543,143 @@ class LiorenService {
   }
 
   buildPayload(data, tipoDte, exentoDocumento) {
+    const fecha = firstDefined(
+      data.emisor?.fecha,
+      data.fecha,
+      data.fecha_emision,
+      new Date().toISOString().slice(0, 10)
+    );
+
+    const rutEmisor = firstDefined(
+      data.emisor?.rut,
+      data.rut_emisor,
+      process.env.LIOREN_RUT_EMISOR
+    );
+
+    if (!rutEmisor) {
+      throw new LiorenError('LIOREN_RUT_EMISOR no está configurado', {
+        status: 500,
+        code: 'LIOREN_RUT_EMISOR_MISSING'
+      });
+    }
+
+    if (
+      data.emisor &&
+      data.receptor &&
+      Array.isArray(data.detalles) &&
+      data.detalles.length > 0
+    ) {
+      const detallesDirectos = data.detalles.map((item, index) => {
+        const cantidad = toNumber(
+          firstDefined(item.cantidad, item.qty, item.QtyItem, item.quantity),
+          1
+        );
+
+        const precio = round(
+          firstDefined(
+            item.precio,
+            item.precio_unitario,
+            item.PrcItem,
+            item.price,
+            item.monto_unitario,
+            0
+          )
+        );
+
+        const descuento = round(
+          firstDefined(item.descuento, item.descuento_monto, item.discount, 0)
+        );
+
+        const monto = round(
+          firstDefined(item.monto, item.total, cantidad * precio - descuento)
+        );
+
+        return {
+          codigo: normalizeItemCode(item, index),
+          nombre: firstDefined(
+            item.nombre,
+            item.descripcion,
+            item.NmbItem,
+            item.name,
+            item.sku,
+            `Item ${index + 1}`
+          ),
+          cantidad,
+          precio,
+          exento: Boolean(firstDefined(item.exento, exentoDocumento)),
+          monto
+        };
+      });
+
+      const payloadDirecto = {
+        emisor: {
+          rut: cleanRut(rutEmisor),
+          tipodoc: String(tipoDte || data.emisor.tipodoc || data.emisor.tipo),
+          fecha
+        },
+        receptor: {
+          rut: cleanRut(
+            firstDefined(
+              data.receptor.rut,
+              data.receptor.RUTRecep,
+              tipoDte === 39 ? '66666666-6' : ''
+            )
+          ),
+          rs: firstDefined(
+            data.receptor.rs,
+            data.receptor.razon_social,
+            data.receptor.razonSocial,
+            data.receptor.nombre,
+            tipoDte === 39 ? 'Consumidor final' : ''
+          ),
+          giro: firstDefined(
+            data.receptor.giro,
+            data.receptor.GiroRecep,
+            tipoDte === 39 ? 'Particular' : 'Sin giro informado'
+          ),
+          comuna: Number(
+            firstDefined(
+              data.receptor.comuna,
+              data.receptor.comuna_id,
+              process.env.LIOREN_DEFAULT_COMUNA_ID,
+              95
+            )
+          ),
+          ciudad: Number(
+            firstDefined(
+              data.receptor.ciudad,
+              data.receptor.ciudad_id,
+              process.env.LIOREN_DEFAULT_CIUDAD_ID,
+              76
+            )
+          ),
+          direccion: firstDefined(
+            data.receptor.direccion,
+            data.receptor.DirRecep,
+            tipoDte === 39 ? 'Sin dirección' : 'Sin dirección informada'
+          )
+        },
+        detalles: detallesDirectos,
+        expects: normalizeExpects(
+          firstDefined(
+            data.expects,
+            data.formato_documento,
+            data.formatoDocumento,
+            process.env.LIOREN_EXPECTS,
+            'pdf'
+          )
+        )
+      };
+
+      const folioDirecto = firstDefined(data.folio, data.emisor?.folio);
+
+      if (folioDirecto !== undefined && folioDirecto !== null && folioDirecto !== '') {
+        payloadDirecto.folio = Number(folioDirecto);
+      }
+
+      return payloadDirecto;
+    }
+
     const cliente = data.cliente || data.receptor || {};
     const productos = normalizeItems(data);
 
@@ -561,26 +701,6 @@ class LiorenService {
         }
       });
     }
-
-    const rutEmisor = firstDefined(
-      data.emisor?.rut,
-      data.rut_emisor,
-      process.env.LIOREN_RUT_EMISOR
-    );
-
-    if (!rutEmisor) {
-      throw new LiorenError('LIOREN_RUT_EMISOR no está configurado', {
-        status: 500,
-        code: 'LIOREN_RUT_EMISOR_MISSING'
-      });
-    }
-
-    const fecha = firstDefined(
-      data.emisor?.fecha,
-      data.fecha,
-      data.fecha_emision,
-      new Date().toISOString().slice(0, 10)
-    );
 
     const comuna = Number(
       firstDefined(
