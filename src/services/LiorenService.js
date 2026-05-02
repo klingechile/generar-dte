@@ -253,7 +253,8 @@ function normalizeLiorenResponse(response) {
     tipo_dte: firstDefined(
       data.tipo_dte,
       data.tipoDocumento,
-      data.tipo_documento
+      data.tipo_documento,
+      data.tipodoc
     ),
     raw: response
   };
@@ -511,21 +512,25 @@ class LiorenService {
 
   emitirFactura(data) {
     const payload = this.buildPayload(data, 33, false);
-    return this.emitirDTE(payload, { path: this.dtePath });
+
+    return this.emitirDTE(payload, {
+      path: this.dtePath
+    });
   }
 
   emitirFacturaExenta(data) {
     const payload = this.buildPayload(data, 34, true);
-    return this.emitirDTE(payload, { path: this.dtePath });
+
+    return this.emitirDTE(payload, {
+      path: this.dtePath
+    });
   }
 
   emitirBoleta(data) {
     const payload = this.buildPayload(data, 39, false);
 
-    const useSeparateBoletaEndpoint = process.env.LIOREN_USE_BOLETA_ENDPOINT === 'true';
-
     return this.emitirDTE(payload, {
-      path: useSeparateBoletaEndpoint ? this.boletaPath : this.dtePath
+      path: this.boletaPath
     });
   }
 
